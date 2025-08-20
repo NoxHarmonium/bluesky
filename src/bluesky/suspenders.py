@@ -173,7 +173,7 @@ class SuspenderBase(metaclass=ABCMeta):
             h = self.RE._loop.call_soon_threadsafe(really_make_the_event)
             # Arbitrarily chosen to be a maximum reasonable time that it should take to schedule
             # a task on the main RE event loop.
-            timeout = 0.1  # second
+            timeout = 1  # second
             if not th_ev.wait(timeout):
                 logger.warning(
                     "Timed out waiting to create the bridging event. "
