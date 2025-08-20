@@ -170,7 +170,7 @@ class SuspenderBase(metaclass=ABCMeta):
                 th_ev.set()
 
             h = self.RE._loop.call_soon_threadsafe(really_make_the_event)
-            if not th_ev.wait(0.1):
+            if not th_ev.wait(1):
                 logger.warning("Timed out waiting to create the bridging event")
                 h.cancel()
         return self._ev
