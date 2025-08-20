@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 from functools import partial
 from warnings import warn
 
+from .log import logger
+
 
 class SuspenderBase(metaclass=ABCMeta):
     """An ABC to manage the callbacks between asyincio and pyepics.
@@ -138,7 +140,13 @@ class SuspenderBase(metaclass=ABCMeta):
                 if self._ev is None and self.RE is not None:
                     self.__make_event()
                     if self._ev is None:
-                        raise RuntimeError("Could not create the ")
+                        raise RuntimeError(
+                            f"Could not create the bridging event from the callback thread "
+                            f"({threading.current_thread().name}) to the Bluesky run engine "
+                            "event loop. This is likely because the run engine event loop is "
+                            "too busy or is being blocked by something. "
+                            "Suspender state will not be updated."
+                        )
                     cb = partial(
                         self.RE.request_suspend,
                         self._ev.wait,
@@ -163,7 +171,18 @@ class SuspenderBase(metaclass=ABCMeta):
                 th_ev.set()
 
             h = self.RE._loop.call_soon_threadsafe(really_make_the_event)
-            if not th_ev.wait(0.1):
+            # Arbitrarily chosen to be a maximum reasonable time that it should take to schedule
+            # a task on the main RE event loop.
+            timeout = 0.1  # second
+            if not th_ev.wait(timeout):
+                logger.warning(
+                    "Timed out waiting to create the bridging event. "
+                    "This suspender will probably not work correctly. "
+                    "This is probably because the main event loop is being blocked "
+                    f"by something for longer than {timeout}s. "
+                    "Ensure you are using async functions in Bluesky plans. "
+                    "E.g. bluesky.plan_stubs.sleep() rather than time.sleep()"
+                )
                 h.cancel()
         return self._ev
 
