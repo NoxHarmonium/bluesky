@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 from functools import partial
 from warnings import warn
 
+from .log import logger
+
 
 class SuspenderBase(metaclass=ABCMeta):
     """An ABC to manage the callbacks between asyincio and pyepics.
@@ -138,7 +140,12 @@ class SuspenderBase(metaclass=ABCMeta):
                 if self._ev is None and self.RE is not None:
                     self.__make_event()
                     if self._ev is None:
-                        raise RuntimeError("Could not create the ")
+                        raise RuntimeError(
+                            "Could not create the bridging event from the callback to the run engine event loop. "
+                            "This is likely because the run engine event loop is too busy "
+                            "or is being blocked by something. "
+                            "Suspender state will not be updated."
+                        )
                     cb = partial(
                         self.RE.request_suspend,
                         self._ev.wait,
@@ -164,6 +171,7 @@ class SuspenderBase(metaclass=ABCMeta):
 
             h = self.RE._loop.call_soon_threadsafe(really_make_the_event)
             if not th_ev.wait(0.1):
+                logger.warning("Timed out waiting to create the bridging event")
                 h.cancel()
         return self._ev
 
