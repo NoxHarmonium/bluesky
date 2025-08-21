@@ -298,3 +298,40 @@ def test_suspender_plans(RE, hw):
     stop = ttime.time()
     delta = stop - start
     assert delta < 0.9
+
+
+def test_suspender_works_if_re_event_loop_blocked(RE, hw):
+    "Tests that if there is a badly behaving plan that is blocking the main run"
+    "engine event loop that suspension still occurs"
+    sig = hw.bool_sig
+
+    pre_plan_executed = False
+
+    def scan():
+        # Badly behaved plan
+        time.sleep(2)
+        yield Msg("null")
+
+    def pre_plan():
+        nonlocal pre_plan_executed
+        pre_plan_executed = True
+
+    msg_lst = []
+    sig.put(0)
+
+    def accum(msg):
+        msg_lst.append(msg)
+
+    susp = SuspendBoolHigh(sig, pre_plan=pre_plan)
+
+    RE.install_suspender(susp)
+    threading.Timer(0.1, sig.put, (1,)).start()
+    threading.Timer(1, sig.put, (0,)).start()
+    RE.msg_hook = accum
+    RE(scan())
+
+    assert pre_plan_executed
+
+    RE.clear_suspenders()
+    assert susp.RE is None
+    assert not RE.suspenders
