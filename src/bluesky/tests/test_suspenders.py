@@ -3,9 +3,11 @@ import time
 import time as ttime
 from functools import partial
 
+from ophyd import Signal
 import pytest
 
 from bluesky import Msg
+from bluesky.plan_stubs import sleep
 from bluesky.preprocessors import suspend_wrapper
 from bluesky.run_engine import RunEngineInterrupted
 from bluesky.suspenders import (
@@ -15,6 +17,7 @@ from bluesky.suspenders import (
     SuspendFloor,
     SuspendInBand,
     SuspendOutBand,
+    SuspendWhenChanged,
     SuspendWhenOutsideBand,
 )
 from bluesky.tests.utils import MsgCollector
@@ -74,6 +77,22 @@ def test_suspender(klass, sc_args, start_val, fail_val, resume_val, wait_time, R
 def test_pretripped(RE, hw):
     "Tests if suspender is tripped before __call__"
     sig = hw.bool_sig
+
+    pre_plan_executed_times = 0
+    post_plan_executed_times = 0
+
+    def pre_plan():
+        nonlocal pre_plan_executed_times
+        pre_plan_executed_times += 1
+        assert pre_plan_executed_times > post_plan_executed_times
+        yield Msg("null")
+
+    def post_plan():
+        nonlocal post_plan_executed_times
+        post_plan_executed_times += 1
+        assert post_plan_executed_times == pre_plan_executed_times
+        yield Msg("null")
+
     scan = [Msg("checkpoint")]
     msg_lst = []
     sig.put(1)
@@ -81,15 +100,17 @@ def test_pretripped(RE, hw):
     def accum(msg):
         msg_lst.append(msg)
 
-    susp = SuspendBoolHigh(sig)
+    susp = SuspendBoolHigh(sig, pre_plan=pre_plan, post_plan=post_plan)
 
     RE.install_suspender(susp)
     threading.Timer(1, sig.put, (0,)).start()
     RE.msg_hook = accum
     RE(scan)
 
-    assert len(msg_lst) == 2
-    assert ["wait_for", "checkpoint"] == [m[0] for m in msg_lst]
+    assert len(msg_lst) == 4
+    assert ["null", "wait_for", "null", "checkpoint"] == [m[0] for m in msg_lst]
+    assert pre_plan_executed_times == 1
+    assert post_plan_executed_times == 1
 
 
 @pytest.mark.parametrize(
@@ -331,6 +352,86 @@ def test_suspender_works_if_re_event_loop_blocked(RE, hw):
     RE(scan())
 
     assert pre_plan_executed
+
+    RE.clear_suspenders()
+    assert susp.RE is None
+    assert not RE.suspenders
+
+
+def test_suspender_works_if_installed_before_running_engine_and_already_out_of_band_bool_high(RE, hw):
+    "Tests that if there is a badly behaving plan that is blocking the main run"
+    "engine event loop that suspension still occurs"
+    sig = hw.bool_sig
+
+    pre_plan_executed_times = 0
+
+    def scan():
+        yield from sleep(2)
+
+    def pre_plan():
+        nonlocal pre_plan_executed_times
+        pre_plan_executed_times += 1
+
+    msg_lst = []
+    # Start the signal out of band - should start plan suspended
+    sig.put(1)
+
+    def accum(msg):
+        msg_lst.append(msg)
+
+    susp = SuspendBoolHigh(sig, pre_plan=pre_plan)
+
+    RE.install_suspender(susp)
+    # Put it back into band - should resume plan
+    threading.Timer(0.1, sig.put, (0,)).start()
+    # Put it back out of band - should suspend plan again
+    threading.Timer(1, sig.put, (1,)).start()
+    # Put it back into band - should resume plan allowing test to end
+    threading.Timer(1.1, sig.put, (0,)).start()
+    RE.msg_hook = accum
+    RE(scan())
+
+    assert pre_plan_executed_times == 2
+
+    RE.clear_suspenders()
+    assert susp.RE is None
+    assert not RE.suspenders
+
+
+def test_suspender_works_if_installed_before_running_engine_and_already_out_of_band_when_changed(RE, hw):
+    "Tests that if there is a badly behaving plan that is blocking the main run"
+    "engine event loop that suspension still occurs"
+    sig = Signal(name="test_signal")
+
+    pre_plan_executed_times = 0
+
+    def scan():
+        yield from sleep(2)
+
+    def pre_plan():
+        nonlocal pre_plan_executed_times
+        pre_plan_executed_times += 1
+
+    msg_lst = []
+    # Start the signal out of band - should start plan suspended
+    sig.put(2)
+
+    def accum(msg):
+        msg_lst.append(msg)
+
+    susp = SuspendWhenChanged(sig, expected_value=1, pre_plan=pre_plan)
+
+    RE.install_suspender(susp)
+    # Put it back into band - should resume plan
+    threading.Timer(0.1, sig.put, (1,)).start()
+    # Put it back out of band - should suspend plan again
+    threading.Timer(1, sig.put, (2,)).start()
+    # Put it back into band - should resume plan allowing test to end
+    threading.Timer(1.1, sig.put, (1,)).start()
+    RE.msg_hook = accum
+    RE(scan())
+
+    assert pre_plan_executed_times == 2
 
     RE.clear_suspenders()
     assert susp.RE is None
