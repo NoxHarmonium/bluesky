@@ -3,8 +3,8 @@ import time
 import time as ttime
 from functools import partial
 
-from ophyd import Signal
 import pytest
+from ophyd import Signal
 
 from bluesky import Msg
 from bluesky.plan_stubs import sleep
@@ -329,9 +329,14 @@ def test_suspender_works_if_re_event_loop_blocked(RE, hw):
     pre_plan_executed = False
 
     def scan():
-        # Badly behaved plan
-        time.sleep(2)
         yield Msg("null")
+        # Badly behaved plan blocking the event loop
+        # Timeout is 1 second, block for just less than that and the suspender should still fire
+        # (it was previously 0.1 seconds) Blocking for longer than 1 second will prevent the
+        # suspender from firing
+        time.sleep(0.9)
+        # Async bluesky sleep to allow the suspender time to work
+        yield from sleep(1)
 
     def pre_plan():
         nonlocal pre_plan_executed
@@ -364,6 +369,7 @@ def test_suspender_works_if_installed_before_running_engine_and_already_out_of_b
     sig = hw.bool_sig
 
     pre_plan_executed_times = 0
+    post_plan_executed_times = 0
 
     def scan():
         yield from sleep(2)
@@ -371,6 +377,14 @@ def test_suspender_works_if_installed_before_running_engine_and_already_out_of_b
     def pre_plan():
         nonlocal pre_plan_executed_times
         pre_plan_executed_times += 1
+        assert pre_plan_executed_times > post_plan_executed_times
+        yield Msg("null")
+
+    def post_plan():
+        nonlocal post_plan_executed_times
+        post_plan_executed_times += 1
+        assert post_plan_executed_times == pre_plan_executed_times
+        yield Msg("null")
 
     msg_lst = []
     # Start the signal out of band - should start plan suspended
@@ -379,7 +393,7 @@ def test_suspender_works_if_installed_before_running_engine_and_already_out_of_b
     def accum(msg):
         msg_lst.append(msg)
 
-    susp = SuspendBoolHigh(sig, pre_plan=pre_plan)
+    susp = SuspendBoolHigh(sig, pre_plan=pre_plan, post_plan=post_plan)
 
     RE.install_suspender(susp)
     # Put it back into band - should resume plan
@@ -404,13 +418,22 @@ def test_suspender_works_if_installed_before_running_engine_and_already_out_of_b
     sig = Signal(name="test_signal")
 
     pre_plan_executed_times = 0
+    post_plan_executed_times = 0
 
     def scan():
-        yield from sleep(2)
+        yield from sleep(1)
 
     def pre_plan():
         nonlocal pre_plan_executed_times
         pre_plan_executed_times += 1
+        assert pre_plan_executed_times > post_plan_executed_times
+        yield Msg("null")
+
+    def post_plan():
+        nonlocal post_plan_executed_times
+        post_plan_executed_times += 1
+        assert post_plan_executed_times == pre_plan_executed_times
+        yield Msg("null")
 
     msg_lst = []
     # Start the signal out of band - should start plan suspended
@@ -419,15 +442,15 @@ def test_suspender_works_if_installed_before_running_engine_and_already_out_of_b
     def accum(msg):
         msg_lst.append(msg)
 
-    susp = SuspendWhenChanged(sig, expected_value=1, pre_plan=pre_plan)
+    susp = SuspendWhenChanged(sig, expected_value=1, pre_plan=pre_plan, post_plan=post_plan, allow_resume=True)
 
     RE.install_suspender(susp)
     # Put it back into band - should resume plan
     threading.Timer(0.1, sig.put, (1,)).start()
     # Put it back out of band - should suspend plan again
-    threading.Timer(1, sig.put, (2,)).start()
+    threading.Timer(0.8, sig.put, (2,)).start()
     # Put it back into band - should resume plan allowing test to end
-    threading.Timer(1.1, sig.put, (1,)).start()
+    threading.Timer(0.9, sig.put, (1,)).start()
     RE.msg_hook = accum
     RE(scan())
 

@@ -925,12 +925,18 @@ class RunEngine:
             raise RuntimeError(f"The RunEngine is in a {self._state} state")
 
         futs = []
+        pre_plans = []
+        post_plans = []
         tripped_justifications = []
         for sup in self.suspenders:
             f_lst, justification = sup.get_futures()
             if f_lst:
                 futs.extend(f_lst)
                 tripped_justifications.append(justification)
+                if callable(sup._pre_plan):
+                    pre_plans.append(sup._pre_plan)
+                if callable(sup._post_plan):
+                    post_plans.append(sup._post_plan)
 
         if tripped_justifications:
             print(
@@ -960,8 +966,15 @@ class RunEngine:
         self._plan_stack.append(gen)
         self._response_stack.append(None)
         if futs:
+            for post_plan in post_plans:
+                self._plan_stack.append(ensure_generator(post_plan()))
+                self._response_stack.append(None)
             self._plan_stack.append(single_gen(Msg("wait_for", None, futs)))
             self._response_stack.append(None)
+            for pre_plan in pre_plans:
+                self._plan_stack.append(ensure_generator(pre_plan()))
+                self._response_stack.append(None)
+
         self.log.info("Executing plan %r", self._plan)
 
         def _build_task():
@@ -1201,7 +1214,7 @@ class RunEngine:
 
         Parameters
         ----------
-        fut : asyncio.Future
+        fut : a future that will end the suspension when it completes
 
         pre_plan : iterable or callable, optional
            Plan to execute just before suspending. If callable, must
