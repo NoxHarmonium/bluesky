@@ -48,7 +48,7 @@ def test_suspender(klass, sc_args, start_val, fail_val, resume_val, wait_time, R
             my_suspender = klass(sig, *sc_args, sleep=wait_time)
     else:
         my_suspender = klass(sig, *sc_args, sleep=wait_time)
-    my_suspender.install(RE)
+    RE.install_suspender(my_suspender)
 
     def putter(val):
         sig.put(val)
