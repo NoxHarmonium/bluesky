@@ -71,6 +71,11 @@ class SuspenderBase(metaclass=ABCMeta):
         """
         with self._lock:
             self.RE = RE
+        if self not in RE._suspenders:
+            raise Exception(
+                "Attempt to install suspender outside the context of the Run Engine. "
+                "You might be using suspender.install(RE) instead of RE.install_suspender(suspender)."
+            )
         self._sig.subscribe(self, event_type=event_type, run=True)
 
     def remove(self):
