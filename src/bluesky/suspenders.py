@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 from functools import partial
 from warnings import warn
 
+from bluesky.run_engine import in_bluesky_event_loop
+
 from .log import logger
 
 
@@ -175,26 +177,35 @@ class SuspenderBase(metaclass=ABCMeta):
                 self._ev = asyncio.Event()
                 th_ev.set()
 
-            h = self.RE._loop.call_soon_threadsafe(really_make_the_event)
-            # Arbitrarily chosen to be a maximum reasonable time that it should take to schedule
-            # a task on the main RE event loop.
-            timeout = 1  # second
-            if not th_ev.wait(timeout):
-                logger.warning(
-                    "Timed out waiting to create the bridging event. "
-                    "This suspender will probably not work correctly. "
-                    "This is probably because the main event loop is being blocked "
-                    f"by something for longer than {timeout}s. "
-                    "Ensure you are using async functions in Bluesky plans. "
-                    "E.g. bluesky.plan_stubs.sleep() rather than time.sleep()"
-                )
-                h.cancel()
+            if in_bluesky_event_loop():
+                # If we are already in the RE loop, there is no need to bridge from another thread
+                # We can just create the event object
+                really_make_the_event()
+            else:
+                # If we are not in the RE loop, we are coming in from some other thread (e.g. pyepics) so it
+                # isn't safe to create the asyncio.Event that the RE will wait on in this thread
+                # Instead we can schedule the event creation on the run loop so it is created in the right context
+                h = self.RE._loop.call_soon_threadsafe(really_make_the_event)
+                # Arbitrarily chosen to be a maximum reasonable time that it should take to schedule
+                # a task on the main RE event loop.
+                timeout = 1  # second
+                if not th_ev.wait(timeout):
+                    logger.warning(
+                        "Timed out waiting to create the bridging event. "
+                        "This suspender will probably not work correctly. "
+                        "This is probably because the main event loop is being blocked "
+                        f"by something for longer than {timeout}s. "
+                        "Ensure you are using async functions in Bluesky plans. "
+                        "E.g. bluesky.plan_stubs.sleep() rather than time.sleep()"
+                    )
+                    h.cancel()
         return self._ev
 
     def __set_event(self, loop):
         """Notify the event that it can resume"""
         assert self._lock.locked()
         if self._ev:
+            # No need to do any bridging here like __make_event because _ev has already been created in the right context
             ev = self._ev
             sleep = self._sleep
 

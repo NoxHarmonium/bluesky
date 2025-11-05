@@ -7,7 +7,7 @@ import pytest
 from ophyd import Signal
 
 from bluesky import Msg
-from bluesky.plan_stubs import sleep
+from bluesky.plan_stubs import checkpoint, sleep, mv
 from bluesky.preprocessors import suspend_wrapper
 from bluesky.run_engine import RunEngineInterrupted
 from bluesky.suspenders import (
@@ -361,3 +361,42 @@ def test_suspender_works_if_re_event_loop_blocked(RE, hw):
     RE.clear_suspenders()
     assert susp.RE is None
     assert not RE.suspenders
+
+def test_callback_fired_from_re_thread(RE, hw):
+    "Tests if suspender is tripped before __call__"
+    sig = hw.bool_sig
+
+    pre_plan_executed_times = 0
+    post_plan_executed_times = 0
+
+    def pre_plan():
+        nonlocal pre_plan_executed_times
+        pre_plan_executed_times += 1
+        assert pre_plan_executed_times > post_plan_executed_times
+        yield from mv(sig, 0)
+
+
+    def post_plan():
+        nonlocal post_plan_executed_times
+        post_plan_executed_times += 1
+        assert post_plan_executed_times == pre_plan_executed_times
+        yield Msg("null")
+
+    def scan():
+        yield from checkpoint()
+        sig.put(1)
+        yield from sleep(1)
+
+    msg_lst = []
+
+    def accum(msg):
+        msg_lst.append(msg)
+
+    susp = SuspendBoolHigh(sig, pre_plan=pre_plan, post_plan=post_plan)
+
+    RE.install_suspender(susp)
+    RE.msg_hook = accum
+    RE(scan())
+
+    assert pre_plan_executed_times == 1
+    assert post_plan_executed_times == 1
